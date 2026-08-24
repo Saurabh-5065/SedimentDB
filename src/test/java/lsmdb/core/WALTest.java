@@ -5,7 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-public class Main {
+public class WALTest {
     public static void main(String[] args) {
         try {
             Path walPath = Files.createTempFile("wal_test_", ".log");

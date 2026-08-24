@@ -43,7 +43,7 @@ public final class WALCodec {
         return buffer.array();
     }
 
-    public WALEntry decode(byte[] payload){
+    public static WALEntry decode(byte[] payload){
         Objects.requireNonNull(payload, "payload");
         try{
             ByteBuffer buffer = ByteBuffer.wrap(payload);
@@ -58,7 +58,7 @@ public final class WALCodec {
                 throw new IllegalArgumentException("Corrupt WAL entry: unknown opcode " + opcode);
             }
 
-            int keyLength = buffer.get();
+            int keyLength = buffer.getInt();
             if (keyLength < 0 || keyLength > buffer.remaining()) {
                 throw new IllegalArgumentException("Corrupt WAL entry: invalid key length " + keyLength);
             }
