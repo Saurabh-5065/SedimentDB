@@ -32,13 +32,15 @@ public class SSTableWriter {
         this(64);
     }
 
-
     /**
+     * Writes a Memtable's entries out as an SSTable. This is the original
+     * flush-path entry point: iterates the Memtable directly and distinguishes
+     * tombstones by identity comparison against {@link Memtable#TOMBSTONE}.
+     *
      * @param filePath destination file path
      * @param memtable source Memtable
      * @throws IOException if an I/O error occurs
      */
-
     public void write(Path filePath, Memtable memtable) throws IOException{
         try (FileChannel channel = FileChannel.open(filePath,
                 StandardOpenOption.CREATE,
@@ -109,6 +111,92 @@ public class SSTableWriter {
 
             flushBuffer(buffer, channel);
             channel.force(true);   // ensures data is written to storage device
+        }
+    }
+
+    /**
+     * Writes an SSTable from a stream of already-merged entries. This is the
+     * compaction-path entry point: unlike {@link #write(Path, Memtable)}, the
+     * source here isn't a Memtable — it's the output of a k-way merge over
+     * several SSTableReaders, so tombstone-ness is carried explicitly on each
+     * entry ({@link SSTableReader.SSTableEntry#isTombstone()}) rather than
+     * inferred by identity comparison.
+     *
+     * The on-disk format and buffered-I/O mechanics are identical to the
+     * Memtable-based write() above — same data block layout, same sparse
+     * index building, same footer. Only the source of entries differs, which
+     * is why the two methods share every private helper below.
+     *
+     * @param filePath destination file path
+     * @param entries  entries in ascending key order, exactly one per key
+     *                 (deduplication and tombstone purging are the merge's
+     *                 job, not the writer's — by the time an entry reaches
+     *                 here, it's meant to be written as-is)
+     * @throws IOException if an I/O error occurs
+     */
+    public void write(Path filePath, Iterator<SSTableReader.SSTableEntry> entries) throws IOException {
+        try (FileChannel channel = FileChannel.open(filePath,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING)) {
+
+            ByteBuffer buffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
+
+            List<String> indexKeys = new ArrayList<>();
+            List<Long> indexOffsets = new ArrayList<>();
+
+            long currentOffset = 0;
+            int entryCount = 0;
+
+            while (entries.hasNext()) {
+                SSTableReader.SSTableEntry entry = entries.next();
+                String key = entry.key();
+
+                if (entryCount % sparseIndexInterval == 0) {
+                    indexKeys.add(key);
+                    indexOffsets.add(currentOffset);
+                }
+                byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
+
+                putInt(buffer, channel, keyBytes.length);
+                putBytes(buffer, channel, keyBytes);
+                currentOffset += 4 + keyBytes.length;
+
+                if (entry.isTombstone()) {
+                    putByte(buffer, channel, VALUE_TYPE_TOMBSTONE);
+                    putInt(buffer, channel, 0);  // value_len = 0
+                    currentOffset += 1 + 4;
+                } else {
+                    byte[] valueBytes = entry.value().getBytes(StandardCharsets.UTF_8);
+                    putByte(buffer, channel, VALUE_TYPE_REGULAR);
+                    putInt(buffer, channel, valueBytes.length);
+                    putBytes(buffer, channel, valueBytes);
+                    currentOffset += 1 + 4 + valueBytes.length;
+                }
+
+                entryCount++;
+            }
+
+            flushBuffer(buffer, channel);
+
+            long indexBlockOffset = currentOffset;
+            for (int i = 0; i < indexKeys.size(); i++) {
+                byte[] keyBytes = indexKeys.get(i).getBytes(StandardCharsets.UTF_8);
+                putInt(buffer, channel, keyBytes.length);
+                putBytes(buffer, channel, keyBytes);
+                putLong(buffer, channel, indexOffsets.get(i));
+            }
+
+            flushBuffer(buffer, channel);
+
+            putLong(buffer, channel, indexBlockOffset);
+            putLong(buffer, channel, currentOffset);   // data_block_size
+            putInt(buffer, channel, entryCount);
+            putInt(buffer, channel, indexKeys.size());
+            putInt(buffer, channel, MAGIC_NUMBER);
+
+            flushBuffer(buffer, channel);
+            channel.force(true);
         }
     }
 

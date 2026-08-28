@@ -32,9 +32,13 @@ public class StorageEngine implements AutoCloseable {
     private static final String SSTABLE_SUFFIX = ".sst";
     private static final String SSTABLE_NAME_FORMAT = "%06d.sst";
 
+    /** Compact (merge all SSTables into one) once this many SSTables have piled up. */
+    private static final int COMPACTION_THRESHOLD = 4;
+
     private final Path dataDirectory;
     private final Path walPath;
     private final int sparseIndexInterval;
+    private final Compactor compactor;
 
     private WAL wal;
     private Memtable memtable;
@@ -63,6 +67,7 @@ public class StorageEngine implements AutoCloseable {
         this.sstables = sstables;
         this.nextSSTableId = nextSSTableId;
         this.sparseIndexInterval = sparseIndexInterval;
+        this.compactor = new Compactor(sparseIndexInterval);
     }
 
     /**
@@ -126,6 +131,11 @@ public class StorageEngine implements AutoCloseable {
         // from an oversized, un-flushed Memtable.
         if (memtable.shouldFlush()) {
             engine.flush();
+        } else if (engine.sstables.size() >= COMPACTION_THRESHOLD) {
+            // flush() would normally trigger this check - if we didn't flush,
+            // do it explicitly in case a prior run left extra SSTables on disk
+            // (e.g. a crash between compaction's swap and delete steps).
+            engine.compactIfNeeded();
         }
 
         return engine;
@@ -217,6 +227,45 @@ public class StorageEngine implements AutoCloseable {
         memtable.clear();
 
         rotateWal();
+
+        compactIfNeeded();
+    }
+
+    /**
+     * Simplified size-tiered trigger from spec Step 4: once the SSTable count
+     * crosses a threshold, merge ALL of them into one. Crude (no tiering by
+     * size, no partial merges) but correct, and it keeps the merge algorithm
+     * itself decoupled from the trigger policy - a smarter trigger can replace
+     * this method later without touching Compactor at all.
+     */
+    private void compactIfNeeded() throws IOException {
+        if (sstables.size() < COMPACTION_THRESHOLD) {
+            return;
+        }
+
+        Path outputPath = dataDirectory.resolve(String.format(SSTABLE_NAME_FORMAT, nextSSTableId));
+        nextSSTableId++;
+
+        // We're compacting every SSTable at once, so no older SSTable survives
+        // to be shadowed - purging tombstones here is always safe (spec Step 3,
+        // Case 1). A future partial/tiered compaction would need to pass false
+        // whenever some inputs are left out of the merge.
+        SSTableReader compacted = compactor.compact(sstables, outputPath, true);
+
+        // Swap first, then close/delete the old files - so if we crash between
+        // swap and delete, both old and new files exist on disk. That's fine:
+        // on restart the read path's "newest wins" rule makes the duplicates
+        // harmless, just wasted space until the next compaction (spec Step 4).
+        List<SSTableReader> oldReaders = new ArrayList<>(sstables);
+        sstables.clear();
+        sstables.add(compacted);
+
+        for (SSTableReader old : oldReaders) {
+            old.close();
+        }
+        for (SSTableReader old : oldReaders) {
+            Files.deleteIfExists(old.getFilePath());
+        }
     }
 
     /**

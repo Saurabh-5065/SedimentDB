@@ -13,10 +13,11 @@ import java.util.NoSuchElementException;
 import java.util.TreeMap;
 
 /**
+ * Reads an SSTable file written by {@link SSTableWriter}.
  * Supports two access patterns:
  *   - get(key): point lookup using the sparse index + a short sequential scan
  *   - iterator(): full sorted scan of every entry (used later by compaction)
-
+ * File layout on disk (written by SSTableWriter):
  *   [ data block  ] entries: key_len(4) key value_type(1) value_len(4) value
  *   [ index block ] entries: key_len(4) key offset(8)
  *   [ footer, 28 bytes fixed at end of file ]
@@ -30,6 +31,7 @@ public class SSTableReader implements AutoCloseable {
     private static final byte VALUE_TYPE_REGULAR = 0x00;
     private static final byte VALUE_TYPE_TOMBSTONE = 0x01;
 
+    private final Path filePath;
     private final FileChannel channel;
 
     // Footer fields, kept around for bookkeeping / debugging.
@@ -38,16 +40,8 @@ public class SSTableReader implements AutoCloseable {
     private final int entryCount;
     private final int indexEntryCount;
 
-    /**
-     * The sparse index, held in memory for the lifetime of this reader.
-     *
-     * We use a TreeMap<String, Long> (key -> byte offset in the data block)
-     * instead of a manually-searched List, because TreeMap.floorEntry(key)
-     * does exactly what step 4.3 of the spec asks for: "the largest indexed
-     * key <= target key". That's precisely the entry point we need for a scan.
-     * (A List + Collections.binarySearch() would work identically — this is
-     * just less code to get wrong.)
-     */
+
+
     private final TreeMap<String, Long> sparseIndex;
 
     /**
@@ -55,6 +49,7 @@ public class SSTableReader implements AutoCloseable {
      * The data block itself is left on disk and read on demand.
      */
     public SSTableReader(Path filePath) throws IOException {
+        this.filePath = filePath;
         this.channel = FileChannel.open(filePath, StandardOpenOption.READ);
 
         try {
@@ -75,7 +70,7 @@ public class SSTableReader implements AutoCloseable {
                 throw new IOException("Bad magic number - not an SSTable file: " + filePath);
             }
 
-            // --- 3 & 4: read + parse the index block into memory ---------------
+            // read + parse the index block into memory ---------------
             long indexBlockSize = (fileSize - FOOTER_SIZE) - indexBlockOffset;
             ByteBuffer indexBuf = readFully(indexBlockOffset, (int) indexBlockSize);
 
@@ -206,6 +201,11 @@ public class SSTableReader implements AutoCloseable {
                 }
             }
         };
+    }
+
+    /** The file this reader was opened from — needed to delete it after compaction. */
+    public Path getFilePath() {
+        return filePath;
     }
 
     public int entryCount() {
