@@ -9,11 +9,11 @@
 #   6. Runs CrashTestVerifier to confirm all ACKed writes survived
 
 param(
-    [string]$DataDir = "D:\WebDev\SystemProgramming\DistroDB\crash-test-data",
+    [string]$DataDir = "D:\WebDev\SystemProgramming\SedimentDB\crash-test-data",
     [int]$WaitSeconds = 5
 )
 
-$classpath = "D:\WebDev\SystemProgramming\DistroDB\target\classes"
+$classpath = "D:\WebDev\SystemProgramming\SedimentDB\target\classes"
 
 Write-Host "=========================================="
 Write-Host " LSM-Tree Crash Recovery Test"
