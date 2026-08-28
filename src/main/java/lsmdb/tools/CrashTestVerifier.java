@@ -1,5 +1,6 @@
-package lsmdb.core;
+package lsmdb.tools;
 
+import lsmdb.core.StorageEngine;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;

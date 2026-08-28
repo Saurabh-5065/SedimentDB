@@ -34,7 +34,7 @@ $errFile = "$DataDir-err.txt"
 # Step 2: Start the writer process
 Write-Host "[2/6] Starting CrashTestWriter ..."
 $proc = Start-Process java `
-    -ArgumentList "-cp", $classpath, "lsmdb.core.CrashTestWriter", $DataDir `
+    -ArgumentList "-cp", $classpath, "lsmdb.tools.CrashTestWriter", $DataDir `
     -PassThru `
     -NoNewWindow `
     -RedirectStandardOutput $ackFile `
@@ -78,7 +78,7 @@ Write-Host ""
 # Step 6: Run the verifier
 Write-Host "[6/6] Running CrashTestVerifier ..."
 Write-Host ""
-& java -cp $classpath lsmdb.core.CrashTestVerifier $DataDir $lastIndex
+& java -cp $classpath lsmdb.tools.CrashTestVerifier $DataDir $lastIndex
 
 Write-Host ""
 Write-Host "=========================================="
